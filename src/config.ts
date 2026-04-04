@@ -18,7 +18,7 @@ export function setDataDir(dir: string | null): void {
 }
 
 function getDefaultDataDir(): string {
-  return resolve(homedir(), ".config", "hungry");
+  return process.env.HUNGRY_DATA_DIR || resolve(homedir(), ".config", "hungry");
 }
 
 export function getDataDir(): string {
