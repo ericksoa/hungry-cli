@@ -83,8 +83,8 @@ describe("UberEatsAdapter", () => {
   });
 
   describe("stub methods throw with descriptive messages", () => {
-    it("order() throws not-implemented", async () => {
-      await expect(adapter.order()).rejects.toThrow("not yet implemented");
+    it("order() throws when not authenticated", async () => {
+      await expect(adapter.order()).rejects.toThrow("Not logged in");
     });
   });
 

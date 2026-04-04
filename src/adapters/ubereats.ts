@@ -646,8 +646,161 @@ export class UberEatsAdapter extends BaseAdapter {
     }
   }
 
-  async order(_confirm?: boolean): Promise<OrderResult> {
-    throw new Error("order() not yet implemented — coming in step 6");
+  async order(confirm?: boolean): Promise<OrderResult> {
+    // Use headed mode — checkout page needs full JS rendering
+    await this.cleanup();
+    const context = await this.launchContext(false);
+    const page = await context.newPage();
+
+    try {
+      // Navigate to home and open cart sidebar to get to checkout
+      await page.goto(UBEREATS_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: 20000,
+      });
+      await page.waitForTimeout(3000);
+
+      // Click the cart button to open sidebar
+      const cartButton = page.locator('button[aria-label*="cart" i]').first();
+      if (!(await cartButton.isVisible({ timeout: 5000 }).catch(() => false))) {
+        throw new Error("Cart is empty. Add items first.");
+      }
+      await cartButton.click();
+      await page.waitForTimeout(3000);
+
+      // Click "Go to checkout" in the sidebar
+      const checkoutLink = page.locator('a:has-text("Go to checkout"), a:has-text("checkout"), button:has-text("Go to checkout")').first();
+      if (await checkoutLink.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await checkoutLink.click();
+        await page.waitForTimeout(4000);
+      } else {
+        // Try navigating directly
+        await page.goto(`${UBEREATS_URL}/checkout`, {
+          waitUntil: "domcontentloaded",
+          timeout: 20000,
+        });
+        await page.waitForTimeout(4000);
+      }
+
+      // Scrape the checkout page for order summary
+      const summary = await page.evaluate(() => {
+        const allText = (document.body.textContent || "").replace(/\s+/g, " ");
+
+        // Extract totals
+        const subtotalMatch = allText.match(/Subtotal\s*\$?([\d.]+)/i);
+        const deliveryMatch = allText.match(/Delivery Fee\s*\$?([\d.]+)/i);
+        const serviceMatch = allText.match(/Service Fee\s*\$?([\d.]+)/i);
+        const taxMatch = allText.match(/(?:Tax|Estimated Tax)\s*\$?([\d.]+)/i);
+        const totalMatch = allText.match(/Total\s*\$?([\d.]+)/i);
+
+        // Extract ETA — look for "XX–YY min" or "XX min" patterns
+        // Use word boundary or whitespace before digits to avoid matching "0022min"
+        const etaMatch = allText.match(/(?:^|\s)(\d{1,3}[\u2013\u2014–-]\d{1,3}\s*min)(?:\s|$)/i)
+          || allText.match(/(?:^|\s)(\d{1,3}\s+min)(?:\s|$)/i);
+        const eta = etaMatch ? etaMatch[1].trim() : "";
+
+        // Extract delivery address
+        const addressMatch = allText.match(/Deliver(?:y|ing)?\s*to\s*([^·•\n]{5,60})/i);
+        const address = addressMatch ? addressMatch[1].trim() : "";
+
+        return {
+          subtotal: subtotalMatch ? `$${subtotalMatch[1]}` : "",
+          deliveryFee: deliveryMatch ? `$${deliveryMatch[1]}` : "",
+          serviceFee: serviceMatch ? `$${serviceMatch[1]}` : "",
+          tax: taxMatch ? `$${taxMatch[1]}` : "",
+          total: totalMatch ? `$${totalMatch[1]}` : "",
+          eta,
+          address,
+        };
+      });
+
+      if (!confirm) {
+        // Just return the summary without placing the order
+        return {
+          success: false,
+          total: summary.total || "unknown",
+          eta: summary.eta || "unknown",
+          orderId: "",
+        };
+      }
+
+      // ACTUALLY PLACE THE ORDER — only if --confirm was passed
+      // Dismiss any modals/overlays (upsells, tip prompts, promos)
+      // that Uber Eats shows before allowing checkout.
+      for (let i = 0; i < 8; i++) {
+        // Press Escape to dismiss any modal
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(500);
+
+        // Click dismiss buttons if visible
+        const dismissSelectors = [
+          'button:has-text("No thanks")',
+          'button:has-text("Skip")',
+          'button:has-text("Not now")',
+          'button[aria-label="Close"]',
+          'button:has-text("Continue")',
+          'button:has-text("Got it")',
+          'button:has-text("Dismiss")',
+        ];
+        let dismissed = false;
+        for (const sel of dismissSelectors) {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
+            await btn.click({ force: true });
+            await page.waitForTimeout(800);
+            dismissed = true;
+            break;
+          }
+        }
+
+        // Check if Place order button is now clickable (no overlay)
+        const placeBtn = page.locator('[data-testid="place-order-btn"]').first();
+        if (await placeBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+          try {
+            await placeBtn.click({ timeout: 2000 });
+            // If click succeeded without timeout, we're done
+            await page.waitForTimeout(8000);
+            break;
+          } catch {
+            // Overlay still blocking — keep dismissing
+          }
+        }
+
+        if (!dismissed) {
+          // Nothing left to dismiss — force click as last resort
+          const btn = page.locator('[data-testid="place-order-btn"]').first();
+          if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+            await btn.click({ force: true });
+            await page.waitForTimeout(8000);
+            break;
+          }
+        }
+      }
+
+      // After placing, try to scrape confirmation details
+      const confirmation = await page.evaluate(() => {
+        const text = (document.body.textContent || "").replace(/\s+/g, " ");
+        // Order ID: look for UUID-like or numeric order references
+        const orderIdMatch = text.match(/order\s*#\s*([A-F0-9-]{8,})/i)
+          || text.match(/confirmation\s*#?\s*:?\s*([A-F0-9-]{8,})/i);
+        // ETA: "XX min" with a space before digits to avoid garbage like "0022min"
+        const etaMatch = text.match(/(?:arrive|delivery|eta|ready)\s+(?:in\s+)?(\d{1,3}\s*[\u2013\u2014–-]\s*\d{1,3}\s*min|\d{1,3}\s+min)/i)
+          || text.match(/(\d{1,2}\s*[\u2013\u2014–-]\s*\d{1,2}\s+min)/i);
+        return {
+          orderId: orderIdMatch ? orderIdMatch[1] : "",
+          eta: etaMatch ? etaMatch[1].trim() : "",
+        };
+      });
+
+      return {
+        success: true,
+        total: summary.total || "see receipt",
+        eta: confirmation.eta || summary.eta || "see app",
+        orderId: confirmation.orderId || "confirmed",
+      };
+    } finally {
+      await page.close();
+    }
   }
 
   async cleanup(): Promise<void> {

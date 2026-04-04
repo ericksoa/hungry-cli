@@ -146,9 +146,19 @@ program
     try {
       const result = await a.order(opts.confirm);
       if (!opts.confirm) {
-        console.log("Order summary (pass --confirm to place):");
+        console.log("Order summary (pass --confirm to place):\n");
+        console.log(`  Total: ${result.total}`);
+        if (result.eta) console.log(`  ETA:   ${result.eta}`);
+      } else {
+        if (result.success) {
+          console.log("Order placed!\n");
+          console.log(`  Total: ${result.total}`);
+          if (result.eta) console.log(`  ETA:   ${result.eta}`);
+          if (result.orderId) console.log(`  Order: ${result.orderId}`);
+        } else {
+          console.log("Order may not have been placed. Check the Uber Eats app.");
+        }
       }
-      console.log(JSON.stringify(result, null, 2));
     } finally {
       await a.cleanup();
     }
