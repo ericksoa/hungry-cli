@@ -2,7 +2,7 @@
 
 Food delivery from the terminal. No ads, no upsells.
 
-A CLI that automates Uber Eats via Playwright, letting you search restaurants, browse menus, manage your cart, and place orders without opening a browser. Built for humans who live in the terminal and AI agents that need structured food delivery APIs.
+A CLI that automates food delivery services via Playwright, letting you search restaurants, browse menus, manage your cart, and place orders without opening a browser. Built for humans who live in the terminal and AI agents that need structured food delivery APIs.
 
 ## Install
 
@@ -19,17 +19,17 @@ Requires Node.js 22+ and Google Chrome installed.
 ## Quick Start
 
 ```bash
-# Log into Uber Eats (one-time, opens Chrome)
+# Log into your delivery service (one-time, opens Chrome)
 hungry auth
 
 # Search for food
 hungry search "chicken bowl"
 
-# Browse a restaurant's menu
-hungry menu "https://www.ubereats.com/store/sweetgreen-marina/..."
+# Browse a restaurant's menu (use a URL from search results)
+hungry menu "<restaurant-url>"
 
 # Add to cart, view, order
-hungry cart add "https://www.ubereats.com/store/..." "Harvest Bowl"
+hungry cart add "<restaurant-url>" "Harvest Bowl"
 hungry cart view
 hungry order              # preview
 hungry order --confirm    # place it
@@ -39,7 +39,7 @@ hungry order --confirm    # place it
 
 ### `hungry auth`
 
-Opens Chrome for you to log into Uber Eats. Saves the session for reuse.
+Opens Chrome for you to log into your delivery service. Saves the session for reuse.
 
 ```bash
 hungry auth            # Open browser to log in
@@ -49,7 +49,7 @@ hungry auth --check    # Verify session is still valid
 
 ### `hungry search <query>`
 
-Search Uber Eats for restaurants matching your query. Returns restaurant name, rating, ETA, delivery fee level, and current offers.
+Search for restaurants matching your query. Returns restaurant name, rating, ETA, delivery fee level, and current offers.
 
 ```bash
 hungry search "sushi"
@@ -62,15 +62,15 @@ hungry search "pizza near me" --toon
 Browse a restaurant's full menu organized by category. Use a URL from search results.
 
 ```bash
-hungry menu "https://www.ubereats.com/store/sweetgreen-marina/..." --json
+hungry menu "<restaurant-url>" --json
 ```
 
 ### `hungry cart add <restaurant-url> <item>`
 
-Add a menu item to your cart. Opens a headed Chrome window to click through the Uber Eats UI.
+Add a menu item to your cart. Opens a headed Chrome window to interact with the delivery service UI.
 
 ```bash
-hungry cart add "https://www.ubereats.com/store/kfc-691-eddy-street/..." "6 pc. Hot & Spicy Wings"
+hungry cart add "<restaurant-url>" "6 pc. Hot Wings"
 ```
 
 ### `hungry cart view`
@@ -116,7 +116,7 @@ Every command supports three output modes:
 $ hungry search "tacos" --toon
 success: true
 data[3]{restaurant,restaurantUrl,itemName,description,price,eta,rating}:
-  Taco Primo,https://www.ubereats.com/store/taco-primo/...,Taco Primo,4.7 (500+) · Buy 1 Get 1 Free,Low fee,13 min,4.7
+  Taco Primo,https://example.com/store/taco-primo/...,Taco Primo,4.7 (500+),Low fee,13 min,4.7
   ...
 metadata:
   timestamp: 2026-04-04T12:00:00.000Z
@@ -127,11 +127,11 @@ metadata:
 
 ## How It Works
 
-hungry-cli uses [Playwright](https://playwright.dev/) to automate a real Chrome browser against the Uber Eats website. There is no official Uber Eats API — all interaction is through browser automation.
+hungry-cli uses [Playwright](https://playwright.dev/) to automate a real Chrome browser against food delivery websites. There is no official API — all interaction is through browser automation with a pluggable adapter interface.
 
-- **Auth**: Opens Chrome with a persistent user data directory. Your session (cookies, localStorage, IndexedDB) is saved locally in `~/.config/hungry/ubereats/`.
-- **Search/Menu**: Headless Chrome navigates to Uber Eats, waits for dynamic content, and scrapes the DOM.
-- **Cart/Order**: Headed Chrome (visible window) is required because Uber Eats blocks headless interaction for cart and checkout operations.
+- **Auth**: Opens Chrome with a persistent user data directory. Your session (cookies, localStorage, IndexedDB) is saved locally in `~/.config/hungry/`.
+- **Search/Menu**: Headless Chrome navigates to the delivery service, waits for dynamic content, and scrapes the DOM.
+- **Cart/Order**: Headed Chrome (visible window) is used for interactive operations like adding items and placing orders.
 
 ### Anti-Detection
 
@@ -147,17 +147,17 @@ src/
   adapter.ts          # BaseAdapter interface (pluggable service adapters)
   adapters/
     index.ts          # Adapter registry
-    ubereats.ts       # Uber Eats Playwright adapter
+    ubereats.ts       # Playwright adapter for food delivery
   config.ts           # Config and data directory management
   format.ts           # Human-readable output formatting
   toon.ts             # TOON (Token-Oriented Object Notation) encoder
 ```
 
-The adapter interface is pluggable — additional delivery services (DoorDash, Grubhub) can be added by implementing `BaseAdapter`.
+The adapter interface is pluggable — additional delivery services can be added by implementing `BaseAdapter`.
 
 ## Sister Project: LunchClaw
 
-[LunchClaw](../lunchclaw) is a NemoClaw-hosted Telegram bot that uses hungry-cli as its backend to order healthy lunch via chat. See `../lunchclaw/CLAUDE.md` for the integration plan.
+[LunchClaw](../lunchclaw) is a NemoClaw-hosted Telegram bot that uses hungry-cli as its backend to order healthy lunch via chat.
 
 ## Development
 
