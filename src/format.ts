@@ -7,10 +7,12 @@ export function formatSearchResults(results: SearchResult[]): string {
 
   const lines: string[] = [];
   for (const [i, r] of results.entries()) {
-    lines.push(
-      `${i + 1}. ${r.itemName} — ${r.restaurant}\n` +
-        `   ${r.price || "??"} · ${r.eta || "?? min"} · ${r.description || ""}`,
-    );
+    // For restaurant-level results, itemName === restaurant — don't repeat it
+    const title = r.itemName && r.itemName !== r.restaurant
+      ? `${r.itemName} — ${r.restaurant}`
+      : r.restaurant;
+    const details = [r.price, r.eta, r.description].filter(Boolean).join(" · ");
+    lines.push(`${i + 1}. ${title}\n   ${details || "No details"}`);
   }
   return lines.join("\n\n");
 }

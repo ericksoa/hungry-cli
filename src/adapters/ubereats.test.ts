@@ -56,11 +56,13 @@ describe("UberEatsAdapter", () => {
     });
   });
 
-  describe("stub methods throw with descriptive messages", () => {
-    it("search() throws not-implemented", async () => {
-      await expect(adapter.search("tacos")).rejects.toThrow("not yet implemented");
+  describe("search", () => {
+    it("throws when not authenticated", async () => {
+      await expect(adapter.search("tacos")).rejects.toThrow("Not logged in");
     });
+  });
 
+  describe("stub methods throw with descriptive messages", () => {
     it("menu() throws not-implemented", async () => {
       await expect(adapter.menu("https://ubereats.com/store/123")).rejects.toThrow(
         "not yet implemented",

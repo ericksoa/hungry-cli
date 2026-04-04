@@ -65,8 +65,7 @@ describe("formatSearchResults", () => {
       },
     ];
     const output = formatSearchResults(results);
-    expect(output).toContain("??");
-    expect(output).toContain("?? min");
+    expect(output).toContain("No details");
   });
 });
 
