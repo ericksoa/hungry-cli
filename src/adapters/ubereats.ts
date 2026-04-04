@@ -582,7 +582,12 @@ export class UberEatsAdapter extends BaseAdapter {
           qty,
         }));
 
-        // If no items found via spans, create a generic summary
+        // If no items found and count is 0, cart is empty
+        if (dedupedItems.length === 0 && itemCount === 0) {
+          return { items: [] as { name: string; price: string; qty: number }[], total: "$0.00", deliveryFee: "", serviceFee: "" };
+        }
+
+        // If no items found via regex but count > 0, create a generic summary
         const finalItems = dedupedItems.length > 0 ? dedupedItems : [{
           name: `${itemCount} item(s)`,
           price: total,
@@ -616,36 +621,26 @@ export class UberEatsAdapter extends BaseAdapter {
       });
       await page.waitForTimeout(3000);
 
-      // Click the cart button to open the cart sidebar
-      const cartButton = page.locator('[data-testid="cart-button"], a[href*="/checkout"], button:has-text("cart"), button:has-text("View cart"), button:has-text("item")').first();
-      if (await cartButton.isVisible().catch(() => false)) {
-        await cartButton.click();
-        await page.waitForTimeout(2000);
-      }
-
-      // Try "Clear all" / "Remove all" first
-      const clearButton = page.getByRole("button", { name: /clear|remove all|empty cart/i });
-      if (await clearButton.isVisible().catch(() => false)) {
-        await clearButton.click();
-        const confirmBtn = page.getByRole("button", { name: /confirm|yes|clear|remove/i });
-        if (await confirmBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await confirmBtn.click();
-        }
-        await page.waitForTimeout(1500);
+      // Click the cart button (aria-label "N cart") to open the sidebar
+      const cartButton = page.locator('button[aria-label*="cart" i]').first();
+      if (!(await cartButton.isVisible({ timeout: 5000 }).catch(() => false))) {
+        // No cart button = cart is already empty
         return;
       }
+      await cartButton.click();
+      await page.waitForTimeout(3000);
 
-      // Fallback: remove items one by one via trash/remove buttons
-      for (let i = 0; i < 20; i++) {
-        const removeBtn = page.getByRole("button", { name: /remove|delete|trash/i }).first();
-        if (!(await removeBtn.isVisible().catch(() => false))) break;
-        await removeBtn.click();
-        const confirmBtn = page.getByRole("button", { name: /remove|confirm|yes/i });
-        if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await confirmBtn.click();
-        }
-        await page.waitForTimeout(1000);
+      // Inside the cart sidebar, use the Decrement buttons to reduce qty to 0.
+      // Each click on Decrement reduces by 1; when qty hits 0 the item is removed.
+      // This is more reliable than finding "Remove" buttons which may not exist.
+      for (let i = 0; i < 50; i++) {
+        const decBtn = page.locator('button[aria-label="Decrement"]').first();
+        if (!(await decBtn.isVisible({ timeout: 2000 }).catch(() => false))) break;
+        await decBtn.click();
+        await page.waitForTimeout(500);
       }
+
+      await page.waitForTimeout(1000);
     } finally {
       await page.close();
     }
