@@ -6,6 +6,20 @@ import { Command } from "commander";
 import { createAdapter } from "./adapters/index.js";
 import { getAdapterName } from "./config.js";
 import { formatSearchResults, formatMenu, formatCart } from "./format.js";
+import { toonResponse } from "./toon.js";
+
+type OutputFormat = { json?: boolean; toon?: boolean };
+
+/** Print data in the requested format, or fall back to the human formatter. */
+function output(data: unknown, opts: OutputFormat, humanFn: () => string): void {
+  if (opts.toon) {
+    console.log(toonResponse(data));
+  } else if (opts.json) {
+    console.log(JSON.stringify(data, null, 2));
+  } else {
+    console.log(humanFn());
+  }
+}
 
 const program = new Command();
 
@@ -24,27 +38,27 @@ program
   .description("Log into your delivery service (opens a browser)")
   .option("--check", "Check if current session is valid (no browser)")
   .option("--status", "Show auth status")
-  .action(async (opts: { check?: boolean; status?: boolean }) => {
+  .option("--json", "Output as JSON")
+  .option("--toon", "Output as TOON (LLM-friendly)")
+  .action(async (opts: { check?: boolean; status?: boolean } & OutputFormat) => {
     const a = adapter();
     try {
       if (opts.check || opts.status) {
         const hasSession = await a.isAuthenticated();
         if (!hasSession) {
-          console.log("Not logged in. Run `hungry auth` to log in.");
+          const result = { authenticated: false, message: "Not logged in" };
+          output(result, opts, () => "Not logged in. Run `hungry auth` to log in.");
           process.exitCode = 1;
           return;
         }
         if (opts.check && "checkSession" in a) {
-          console.log("Checking session validity...");
           const valid = await (a as { checkSession: () => Promise<boolean> }).checkSession();
-          if (valid) {
-            console.log("Session is valid.");
-          } else {
-            console.log("Session expired. Run `hungry auth` to re-login.");
-            process.exitCode = 1;
-          }
+          const result = { authenticated: true, valid, message: valid ? "Session is valid" : "Session expired" };
+          output(result, opts, () => valid ? "Session is valid." : "Session expired. Run `hungry auth` to re-login.");
+          if (!valid) process.exitCode = 1;
         } else {
-          console.log("Session file exists. Use --check to verify it's still valid.");
+          const result = { authenticated: true, valid: null, message: "Session file exists" };
+          output(result, opts, () => "Session file exists. Use --check to verify it's still valid.");
         }
         return;
       }
@@ -59,16 +73,13 @@ program
   .command("search <query...>")
   .description("Search for food")
   .option("--json", "Output as JSON")
-  .action(async (queryParts: string[], opts: { json?: boolean }) => {
+  .option("--toon", "Output as TOON (LLM-friendly)")
+  .action(async (queryParts: string[], opts: OutputFormat) => {
     const a = adapter();
     try {
       const query = queryParts.join(" ");
       const results = await a.search(query);
-      if (opts.json) {
-        console.log(JSON.stringify(results, null, 2));
-      } else {
-        console.log(formatSearchResults(results));
-      }
+      output(results, opts, () => formatSearchResults(results));
     } finally {
       await a.cleanup();
     }
@@ -79,15 +90,12 @@ program
   .command("menu <restaurant-url>")
   .description("Browse a restaurant's menu")
   .option("--json", "Output as JSON")
-  .action(async (restaurantUrl: string, opts: { json?: boolean }) => {
+  .option("--toon", "Output as TOON (LLM-friendly)")
+  .action(async (restaurantUrl: string, opts: OutputFormat) => {
     const a = adapter();
     try {
       const items = await a.menu(restaurantUrl);
-      if (opts.json) {
-        console.log(JSON.stringify(items, null, 2));
-      } else {
-        console.log(formatMenu(items));
-      }
+      output(items, opts, () => formatMenu(items));
     } finally {
       await a.cleanup();
     }
@@ -99,12 +107,14 @@ const cart = program.command("cart").description("Manage your cart");
 cart
   .command("add <restaurant-url> <item...>")
   .description("Add an item to your cart")
-  .action(async (restaurantUrl: string, itemParts: string[]) => {
+  .option("--json", "Output as JSON")
+  .option("--toon", "Output as TOON (LLM-friendly)")
+  .action(async (restaurantUrl: string, itemParts: string[], opts: OutputFormat) => {
     const a = adapter();
     try {
       const itemName = itemParts.join(" ");
       const result = await a.cartAdd(restaurantUrl, itemName);
-      console.log(`Added "${itemName}" to cart. Total: ${result.cartTotal}`);
+      output(result, opts, () => `Added "${itemName}" to cart. Total: ${result.cartTotal}`);
     } finally {
       await a.cleanup();
     }
@@ -113,11 +123,13 @@ cart
 cart
   .command("view")
   .description("View current cart")
-  .action(async () => {
+  .option("--json", "Output as JSON")
+  .option("--toon", "Output as TOON (LLM-friendly)")
+  .action(async (opts: OutputFormat) => {
     const a = adapter();
     try {
       const result = await a.cartView();
-      console.log(formatCart(result));
+      output(result, opts, () => formatCart(result));
     } finally {
       await a.cleanup();
     }
@@ -126,11 +138,14 @@ cart
 cart
   .command("clear")
   .description("Clear your cart")
-  .action(async () => {
+  .option("--json", "Output as JSON")
+  .option("--toon", "Output as TOON (LLM-friendly)")
+  .action(async (opts: OutputFormat) => {
     const a = adapter();
     try {
       await a.cartClear();
-      console.log("Cart cleared.");
+      const result = { success: true, message: "Cart cleared" };
+      output(result, opts, () => "Cart cleared.");
     } finally {
       await a.cleanup();
     }
@@ -141,24 +156,28 @@ program
   .command("order")
   .description("Place your order")
   .option("--confirm", "Actually place the order (without this flag, just shows summary)")
-  .action(async (opts: { confirm?: boolean }) => {
+  .option("--json", "Output as JSON")
+  .option("--toon", "Output as TOON (LLM-friendly)")
+  .action(async (opts: { confirm?: boolean } & OutputFormat) => {
     const a = adapter();
     try {
       const result = await a.order(opts.confirm);
-      if (!opts.confirm) {
-        console.log("Order summary (pass --confirm to place):\n");
-        console.log(`  Total: ${result.total}`);
-        if (result.eta) console.log(`  ETA:   ${result.eta}`);
-      } else {
-        if (result.success) {
-          console.log("Order placed!\n");
-          console.log(`  Total: ${result.total}`);
-          if (result.eta) console.log(`  ETA:   ${result.eta}`);
-          if (result.orderId) console.log(`  Order: ${result.orderId}`);
-        } else {
-          console.log("Order may not have been placed. Check the Uber Eats app.");
+      output(result, opts, () => {
+        if (!opts.confirm) {
+          const lines = ["Order summary (pass --confirm to place):\n"];
+          lines.push(`  Total: ${result.total}`);
+          if (result.eta) lines.push(`  ETA:   ${result.eta}`);
+          return lines.join("\n");
         }
-      }
+        if (result.success) {
+          const lines = ["Order placed!\n"];
+          lines.push(`  Total: ${result.total}`);
+          if (result.eta) lines.push(`  ETA:   ${result.eta}`);
+          if (result.orderId) lines.push(`  Order: ${result.orderId}`);
+          return lines.join("\n");
+        }
+        return "Order may not have been placed. Check the Uber Eats app.";
+      });
     } finally {
       await a.cleanup();
     }
