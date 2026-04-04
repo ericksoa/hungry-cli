@@ -2,7 +2,7 @@
 
 Food delivery from the terminal. No ads, no upsells.
 
-A CLI that automates food delivery services via Playwright, letting you search restaurants, browse menus, manage your cart, and place orders without opening a browser. Built for humans who live in the terminal and AI agents that need structured food delivery APIs.
+A CLI for searching restaurants, browsing menus, managing your cart, and placing delivery orders. Built for humans who live in the terminal and AI agents that need structured food delivery APIs.
 
 ## Install
 
@@ -67,7 +67,7 @@ hungry menu "<restaurant-url>" --json
 
 ### `hungry cart add <restaurant-url> <item>`
 
-Add a menu item to your cart. Opens a headed Chrome window to interact with the delivery service UI.
+Add a menu item to your cart.
 
 ```bash
 hungry cart add "<restaurant-url>" "6 pc. Hot Wings"
@@ -125,20 +125,6 @@ metadata:
 
 [TOON format spec](https://toonformat.dev/)
 
-## How It Works
-
-hungry-cli uses [Playwright](https://playwright.dev/) to automate a real Chrome browser against food delivery websites. There is no official API — all interaction is through browser automation with a pluggable adapter interface.
-
-- **Auth**: Opens Chrome with a persistent user data directory. Your session (cookies, localStorage, IndexedDB) is saved locally in `~/.config/hungry/`.
-- **Search/Menu**: Headless Chrome navigates to the delivery service, waits for dynamic content, and scrapes the DOM.
-- **Cart/Order**: Headed Chrome (visible window) is used for interactive operations like adding items and placing orders.
-
-### Anti-Detection
-
-- Uses `channel: 'chrome'` to launch your real Chrome installation instead of Playwright's bundled Chromium
-- Disables automation indicators (`--disable-blink-features=AutomationControlled`)
-- Persistent browser context preserves full session state between runs
-
 ## Architecture
 
 ```
@@ -147,7 +133,7 @@ src/
   adapter.ts          # BaseAdapter interface (pluggable service adapters)
   adapters/
     index.ts          # Adapter registry
-    ubereats.ts       # Playwright adapter for food delivery
+    ubereats.ts       # Default delivery service adapter
   config.ts           # Config and data directory management
   format.ts           # Human-readable output formatting
   toon.ts             # TOON (Token-Oriented Object Notation) encoder
