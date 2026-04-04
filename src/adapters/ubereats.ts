@@ -123,8 +123,12 @@ export class UberEatsAdapter extends BaseAdapter {
     }
   }
 
-  private async launchContext(): Promise<BrowserContext> {
-    if (this.context) return this.context;
+  private async launchContext(headless = true): Promise<BrowserContext> {
+    // If we already have a context, only reuse it if the headless mode matches
+    if (this.context) {
+      // Can't switch headless mode on an existing context — just reuse
+      return this.context;
+    }
 
     if (!(await this.isAuthenticated())) {
       throw new Error("Not logged in. Run `hungry auth` first.");
@@ -133,7 +137,7 @@ export class UberEatsAdapter extends BaseAdapter {
     // Prefer persistent context (user data dir) for best session durability
     this.context = await chromium.launchPersistentContext(this.userDataDir, {
       ...LAUNCH_OPTIONS,
-      headless: true,
+      headless,
     });
 
     // launchPersistentContext returns a BrowserContext but we need to track
@@ -367,16 +371,284 @@ export class UberEatsAdapter extends BaseAdapter {
     }
   }
 
-  async cartAdd(_restaurantUrl: string, _itemName: string): Promise<CartAddResult> {
-    throw new Error("cartAdd() not yet implemented — coming in step 5");
+  async cartAdd(restaurantUrl: string, itemName: string): Promise<CartAddResult> {
+    // Cart interactions need headed mode — Uber Eats blocks clicks in headless
+    await this.cleanup(); // close any existing headless context
+    const context = await this.launchContext(false);
+    const page = await context.newPage();
+
+    try {
+      const url = restaurantUrl.startsWith("http")
+        ? restaurantUrl
+        : `${UBEREATS_URL}${restaurantUrl}`;
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await page.waitForSelector('a[href*="/store/"]', { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(2000);
+
+      // Find the menu item link by matching item name in the link text.
+      // Use case-insensitive partial match since names may not be exact.
+      const lowerName = itemName.toLowerCase();
+      const itemLink = await page.evaluateHandle((name: string) => {
+        const links = Array.from(document.querySelectorAll('a[href*="/store/"]'));
+        return links.find((a) => {
+          const text = (a.textContent || "").toLowerCase();
+          // Must contain a price to be a menu item link
+          return text.includes(name) && /\$\d+\.\d{2}/.test(text);
+        }) || null;
+      }, lowerName);
+
+      if (!itemLink || !(await itemLink.asElement())) {
+        throw new Error(`Item "${itemName}" not found on the menu.`);
+      }
+
+      // Click the item to open the detail/customization modal
+      await (itemLink.asElement()!).click();
+      await page.waitForTimeout(1500);
+
+      // Click "Add to order" button in the modal.
+      // Look for buttons with text containing "Add to order" or "Add X to order"
+      const addButton = page.getByRole("button", { name: /add.*to order|add \d+ to order/i });
+      await addButton.waitFor({ timeout: 8000 });
+      await addButton.click();
+      await page.waitForTimeout(2000);
+
+      // After adding, try to read the cart count from the page
+      const cartInfo = await page.evaluate(() => {
+        // Look for cart badge or button showing item count and total
+        const cartButton = document.querySelector('[data-testid="cart-button"], a[href*="/checkout"]');
+        const text = cartButton?.textContent || "";
+        const countMatch = text.match(/(\d+)\s*item/i);
+        const totalMatch = text.match(/\$[\d.]+/);
+        return {
+          count: countMatch ? parseInt(countMatch[1], 10) : 1,
+          total: totalMatch ? totalMatch[0] : "",
+        };
+      });
+
+      return {
+        success: true,
+        cartTotal: cartInfo.total || "see cart",
+        itemCount: cartInfo.count,
+      };
+    } finally {
+      await page.close();
+    }
   }
 
   async cartView(): Promise<CartState> {
-    throw new Error("cartView() not yet implemented — coming in step 5");
+    await this.cleanup();
+    const context = await this.launchContext(false);
+    const page = await context.newPage();
+
+    try {
+      // Go to Uber Eats feed — the cart is accessible from the top nav.
+      await page.goto(UBEREATS_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: 20000,
+      });
+      await page.waitForTimeout(3000);
+
+      // The cart button in the top nav has aria-label like "1 cart" or "2 cart".
+      // Click it to open the cart sidebar.
+      const cartButton = page.locator('button[aria-label*="cart" i]').first();
+      let cartOpened = false;
+      if (await cartButton.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await cartButton.click();
+        // Wait for the sidebar to fully render
+        await page.waitForTimeout(4000);
+        cartOpened = true;
+        if (process.env.HUNGRY_DEBUG) {
+          console.error(`Cart button clicked: ${cartOpened}`);
+        }
+      } else if (process.env.HUNGRY_DEBUG) {
+        console.error("Cart button NOT found");
+      }
+
+      if (process.env.HUNGRY_DEBUG) {
+        const debug = await page.evaluate(() => {
+          const info: string[] = [];
+          info.push(`URL: ${location.href}`);
+          // Show text around "Harvest" in the full body text
+          const full = (document.body.textContent || "");
+          const idx = full.indexOf("Harvest");
+          if (idx >= 0) {
+            info.push(`\nText around "Harvest" (raw, no whitespace collapse):`);
+            info.push(`  "${full.slice(Math.max(0, idx - 60), idx + 80)}"`);
+          }
+          const collapsed = full.replace(/\s+/g, " ");
+          const idx2 = collapsed.indexOf("Harvest");
+          if (idx2 >= 0) {
+            info.push(`\nText around "Harvest" (collapsed):`);
+            info.push(`  "${collapsed.slice(Math.max(0, idx2 - 60), idx2 + 80)}"`);
+          }
+          // Test the regex directly
+          const pattern = /Chevron right small(.+?)bases:/g;
+          const m = pattern.exec(collapsed);
+          info.push(`\nRegex match: ${m ? JSON.stringify(m[1]) : "NO MATCH"}`);
+          // Also check if "Chevron right small" even exists in the text
+          info.push(`Contains "Chevron right small": ${collapsed.includes("Chevron right small")}`);
+          // Look specifically for the cart sidebar content
+          // The Increment/Decrement buttons indicate cart items are present
+          const decrementBtns = document.querySelectorAll('button[aria-label="Decrement"]');
+          info.push(`\nDecrement buttons found: ${decrementBtns.length}`);
+          decrementBtns.forEach((btn, i) => {
+            // Walk up to find the cart item container
+            let container = btn.parentElement;
+            for (let j = 0; j < 6 && container; j++) {
+              container = container.parentElement;
+            }
+            if (container) {
+              info.push(`  Item ${i}: "${container.textContent?.replace(/\s+/g, " ").trim().slice(0, 200)}"`);
+            }
+          });
+          info.push(`\nAll $ text (first 15):`);
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          let count = 0;
+          let node: Text | null;
+          while ((node = walker.nextNode() as Text | null) && count < 15) {
+            const t = node.textContent?.trim() || "";
+            if (t.includes("$") && t.length < 60) {
+              info.push(`  "${t}"`);
+              count++;
+            }
+          }
+          return info.join("\n");
+        });
+        console.error(debug);
+      }
+
+      // Parse cart from the sidebar. The sidebar shows item names with
+      // customization text like "Harvest Bowl bases: included Kale..."
+      // but doesn't show individual prices. We extract what we can.
+      const cart = await page.evaluate(() => {
+        const allText = (document.body.textContent || "").replace(/\s+/g, " ");
+
+        // Only treat as empty if there's no cart button with a count
+        const hasCartButton = !!document.querySelector('button[aria-label*="cart"]');
+        if (!hasCartButton && /your cart is empty/i.test(allText)) {
+          return { items: [] as { name: string; price: string; qty: number }[], total: "$0.00", deliveryFee: "", serviceFee: "" };
+        }
+
+        // Get cart item count from the cart button aria-label ("1 cart", "3 cart")
+        const cartBtn = document.querySelector('button[aria-label*="cart"]') ||
+          document.querySelector('button[aria-label*="Cart"]');
+        const cartLabel = cartBtn?.getAttribute("aria-label") || "";
+        const countMatch = cartLabel.match(/(\d+)/);
+        const itemCount = countMatch ? parseInt(countMatch[1], 10) : 0;
+
+        // The cart sidebar text follows a pattern like:
+        // "Close [store] [store] [address] Chevron right small [ItemName] bases: ..."
+        // Extract item names by looking for text between "Chevron right small" and "bases:"
+        const items: { name: string; price: string; qty: number }[] = [];
+
+        // Look for "Go to checkout" button which often has the total
+        const checkoutBtn = document.querySelector('a[href*="checkout"], button');
+        let total = "";
+        document.querySelectorAll("a, button").forEach((el) => {
+          const t = el.textContent?.trim() || "";
+          if (/go to checkout/i.test(t)) {
+            const priceMatch = t.match(/\$[\d.]+/);
+            if (priceMatch) total = priceMatch[0];
+          }
+        });
+
+        const fullText = allText; // already collapsed above
+
+        const itemPattern = /Chevron right small(.+?)bases:/g;
+        let match;
+        const itemCounts = new Map<string, number>();
+        while ((match = itemPattern.exec(fullText)) !== null) {
+          const name = match[1].trim();
+          if (name.length >= 2 && name.length < 80) {
+            itemCounts.set(name, (itemCounts.get(name) || 0) + 1);
+          }
+        }
+
+        // Also try pattern without "bases:" for items that don't have customization
+        // e.g., drinks: "Chevron right small[ItemName]$XX.XX" or just "Chevron right small[ItemName]1"
+        if (itemCounts.size === 0) {
+          const altPattern = /Chevron right small([A-Z][^$\d]{2,60?}?)(?:\$|\d)/g;
+          while ((match = altPattern.exec(fullText)) !== null) {
+            const name = match[1].trim();
+            if (name.length >= 2 && name.length < 80) {
+              itemCounts.set(name, (itemCounts.get(name) || 0) + 1);
+            }
+          }
+        }
+
+        const dedupedItems = Array.from(itemCounts.entries()).map(([name, qty]) => ({
+          name,
+          price: "",
+          qty,
+        }));
+
+        // If no items found via spans, create a generic summary
+        const finalItems = dedupedItems.length > 0 ? dedupedItems : [{
+          name: `${itemCount} item(s)`,
+          price: total,
+          qty: itemCount,
+        }];
+
+        return {
+          items: finalItems,
+          total: total || "see checkout",
+          deliveryFee: "",
+          serviceFee: "",
+        };
+      });
+
+      return cart;
+    } finally {
+      await page.close();
+    }
   }
 
   async cartClear(): Promise<void> {
-    throw new Error("cartClear() not yet implemented — coming in step 5");
+    await this.cleanup();
+    const context = await this.launchContext(false);
+    const page = await context.newPage();
+
+    try {
+      // Go to home page and open the cart sidebar
+      await page.goto(UBEREATS_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: 20000,
+      });
+      await page.waitForTimeout(3000);
+
+      // Click the cart button to open the cart sidebar
+      const cartButton = page.locator('[data-testid="cart-button"], a[href*="/checkout"], button:has-text("cart"), button:has-text("View cart"), button:has-text("item")').first();
+      if (await cartButton.isVisible().catch(() => false)) {
+        await cartButton.click();
+        await page.waitForTimeout(2000);
+      }
+
+      // Try "Clear all" / "Remove all" first
+      const clearButton = page.getByRole("button", { name: /clear|remove all|empty cart/i });
+      if (await clearButton.isVisible().catch(() => false)) {
+        await clearButton.click();
+        const confirmBtn = page.getByRole("button", { name: /confirm|yes|clear|remove/i });
+        if (await confirmBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await confirmBtn.click();
+        }
+        await page.waitForTimeout(1500);
+        return;
+      }
+
+      // Fallback: remove items one by one via trash/remove buttons
+      for (let i = 0; i < 20; i++) {
+        const removeBtn = page.getByRole("button", { name: /remove|delete|trash/i }).first();
+        if (!(await removeBtn.isVisible().catch(() => false))) break;
+        await removeBtn.click();
+        const confirmBtn = page.getByRole("button", { name: /remove|confirm|yes/i });
+        if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await confirmBtn.click();
+        }
+        await page.waitForTimeout(1000);
+      }
+    } finally {
+      await page.close();
+    }
   }
 
   async order(_confirm?: boolean): Promise<OrderResult> {

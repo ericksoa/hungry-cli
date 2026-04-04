@@ -68,22 +68,21 @@ describe("UberEatsAdapter", () => {
     });
   });
 
+  describe("cart operations", () => {
+    it("cartAdd() throws when not authenticated", async () => {
+      await expect(adapter.cartAdd("https://ubereats.com/store/123", "Burrito")).rejects.toThrow("Not logged in");
+    });
+
+    it("cartView() throws when not authenticated", async () => {
+      await expect(adapter.cartView()).rejects.toThrow("Not logged in");
+    });
+
+    it("cartClear() throws when not authenticated", async () => {
+      await expect(adapter.cartClear()).rejects.toThrow("Not logged in");
+    });
+  });
+
   describe("stub methods throw with descriptive messages", () => {
-
-    it("cartAdd() throws not-implemented", async () => {
-      await expect(adapter.cartAdd("https://ubereats.com/store/123", "Burrito")).rejects.toThrow(
-        "not yet implemented",
-      );
-    });
-
-    it("cartView() throws not-implemented", async () => {
-      await expect(adapter.cartView()).rejects.toThrow("not yet implemented");
-    });
-
-    it("cartClear() throws not-implemented", async () => {
-      await expect(adapter.cartClear()).rejects.toThrow("not yet implemented");
-    });
-
     it("order() throws not-implemented", async () => {
       await expect(adapter.order()).rejects.toThrow("not yet implemented");
     });
