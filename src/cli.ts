@@ -5,6 +5,7 @@
 import { Command } from "commander";
 import { createAdapter } from "./adapters/index.js";
 import { getAdapterName } from "./config.js";
+import { formatSearchResults, formatMenu, formatCart } from "./format.js";
 
 const program = new Command();
 
@@ -43,16 +44,7 @@ program
       if (opts.json) {
         console.log(JSON.stringify(results, null, 2));
       } else {
-        if (results.length === 0) {
-          console.log("No results found.");
-          return;
-        }
-        for (const [i, r] of results.entries()) {
-          console.log(
-            `${i + 1}. ${r.itemName} — ${r.restaurant}\n` +
-              `   ${r.price || "??"} · ${r.eta || "?? min"} · ${r.description || ""}\n`,
-          );
-        }
+        console.log(formatSearchResults(results));
       }
     } finally {
       await a.cleanup();
@@ -71,21 +63,7 @@ program
       if (opts.json) {
         console.log(JSON.stringify(items, null, 2));
       } else {
-        if (items.length === 0) {
-          console.log("No menu items found.");
-          return;
-        }
-        let currentCategory: string | null = null;
-        for (const item of items) {
-          if (item.category && item.category !== currentCategory) {
-            currentCategory = item.category;
-            console.log(`\n── ${currentCategory} ──`);
-          }
-          console.log(`  ${item.itemName}  ${item.price || ""}`);
-          if (item.description) {
-            console.log(`    ${item.description}`);
-          }
-        }
+        console.log(formatMenu(items));
       }
     } finally {
       await a.cleanup();
@@ -116,16 +94,7 @@ cart
     const a = adapter();
     try {
       const result = await a.cartView();
-      if (result.items.length === 0) {
-        console.log("Cart is empty.");
-        return;
-      }
-      for (const item of result.items) {
-        console.log(`  ${item.qty}x ${item.name}  ${item.price}`);
-      }
-      console.log(`\n  Subtotal: ${result.total}`);
-      if (result.deliveryFee) console.log(`  Delivery: ${result.deliveryFee}`);
-      if (result.serviceFee) console.log(`  Service fee: ${result.serviceFee}`);
+      console.log(formatCart(result));
     } finally {
       await a.cleanup();
     }
