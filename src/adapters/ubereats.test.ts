@@ -29,11 +29,30 @@ describe("UberEatsAdapter", () => {
       expect(await adapter.isAuthenticated()).toBe(false);
     });
 
-    it("returns true when auth state file exists", async () => {
+    it("returns false when only auth.json exists but no chrome-profile", async () => {
       const stateDir = join(tempDir, "ubereats");
       mkdirSync(stateDir, { recursive: true });
       writeFileSync(join(stateDir, "auth.json"), JSON.stringify({ cookies: [] }));
+      expect(await adapter.isAuthenticated()).toBe(false);
+    });
+
+    it("returns false when only chrome-profile exists but no auth.json", async () => {
+      const stateDir = join(tempDir, "ubereats");
+      mkdirSync(join(stateDir, "chrome-profile"), { recursive: true });
+      expect(await adapter.isAuthenticated()).toBe(false);
+    });
+
+    it("returns true when both auth.json and chrome-profile exist", async () => {
+      const stateDir = join(tempDir, "ubereats");
+      mkdirSync(join(stateDir, "chrome-profile"), { recursive: true });
+      writeFileSync(join(stateDir, "auth.json"), JSON.stringify({ cookies: [] }));
       expect(await adapter.isAuthenticated()).toBe(true);
+    });
+  });
+
+  describe("checkSession", () => {
+    it("returns false when not authenticated", async () => {
+      expect(await adapter.checkSession()).toBe(false);
     });
   });
 
@@ -69,7 +88,6 @@ describe("UberEatsAdapter", () => {
 
   describe("cleanup", () => {
     it("is safe to call when no browser is open", async () => {
-      // Should not throw
       await adapter.cleanup();
     });
 

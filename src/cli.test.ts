@@ -73,6 +73,18 @@ describe("CLI integration", () => {
     expect(output).toContain("--days");
   });
 
+  it("shows auth help with --check and --status flags", () => {
+    const output = run("auth", "--help");
+    expect(output).toContain("Log into your delivery service");
+    expect(output).toContain("--check");
+    expect(output).toContain("--status");
+  });
+
+  it("auth --status reports not logged in when no session exists", () => {
+    const { stdout } = runFail("auth", "--status");
+    expect(stdout).toContain("Not logged in");
+  });
+
   it("exits with error for unknown command", () => {
     const { stderr } = runFail("nonexistent");
     expect(stderr).toContain("unknown command");

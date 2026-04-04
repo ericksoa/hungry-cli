@@ -22,9 +22,32 @@ function adapter() {
 program
   .command("auth")
   .description("Log into your delivery service (opens a browser)")
-  .action(async () => {
+  .option("--check", "Check if current session is valid (no browser)")
+  .option("--status", "Show auth status")
+  .action(async (opts: { check?: boolean; status?: boolean }) => {
     const a = adapter();
     try {
+      if (opts.check || opts.status) {
+        const hasSession = await a.isAuthenticated();
+        if (!hasSession) {
+          console.log("Not logged in. Run `hungry auth` to log in.");
+          process.exitCode = 1;
+          return;
+        }
+        if (opts.check && "checkSession" in a) {
+          console.log("Checking session validity...");
+          const valid = await (a as { checkSession: () => Promise<boolean> }).checkSession();
+          if (valid) {
+            console.log("Session is valid.");
+          } else {
+            console.log("Session expired. Run `hungry auth` to re-login.");
+            process.exitCode = 1;
+          }
+        } else {
+          console.log("Session file exists. Use --check to verify it's still valid.");
+        }
+        return;
+      }
       await a.auth();
     } finally {
       await a.cleanup();
