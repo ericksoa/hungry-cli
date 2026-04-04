@@ -258,8 +258,113 @@ export class UberEatsAdapter extends BaseAdapter {
     }
   }
 
-  async menu(_restaurantUrl: string): Promise<MenuItem[]> {
-    throw new Error("menu() not yet implemented — coming in step 4");
+  async menu(restaurantUrl: string): Promise<MenuItem[]> {
+    const context = await this.launchContext();
+    const page = await context.newPage();
+
+    try {
+      // Restaurant URLs from search are full URLs or /store/ paths
+      const url = restaurantUrl.startsWith("http")
+        ? restaurantUrl
+        : `${UBEREATS_URL}${restaurantUrl}`;
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+
+      // Wait for menu content to render
+      await page.waitForSelector('a[href*="/store/"], ul, [role="list"]', { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(3000);
+
+      // Scrape menu items from the restaurant page.
+      // Uber Eats menu structure (from debug analysis):
+      // - Category headings are <h3> elements ("Bowls", "Salads", "Drinks")
+      // - Menu items are <a> links to the same store URL containing
+      //   "ItemName$XX.XXDescription text..." as concatenated text
+      // - The store's own URL path identifies which links are menu items
+      //   vs. links to other restaurants
+      const items = await page.evaluate((storeUrl: string) => {
+        const results: {
+          itemName: string;
+          description: string;
+          price: string;
+          category: string;
+        }[] = [];
+
+        // Extract the store path to filter links (e.g., "/store/sweetgreen-marina/...")
+        const storePath = new URL(storeUrl).pathname.split("?")[0];
+        const storeSlug = storePath.split("/").filter(Boolean).slice(0, 2).join("/");
+
+        // Build a map of category headings by their position in the DOM
+        // so we can assign each item to its nearest preceding heading
+        const headings = Array.from(document.querySelectorAll("h3"));
+        const categoryHeadings = headings
+          .map((h) => ({
+            text: h.textContent?.trim() || "",
+            top: h.getBoundingClientRect().top,
+          }))
+          .filter((h) => h.text.length > 0 && h.text.length < 50);
+
+        // Find all <a> links that point to this store and contain a price
+        const links = Array.from(document.querySelectorAll('a[href*="/store/"]'));
+        const seenNames = new Set<string>();
+
+        for (const link of links) {
+          const href = link.getAttribute("href") || "";
+          // Only links to THIS store are menu items
+          if (!href.includes(storeSlug)) continue;
+
+          const allText = (link.textContent || "").replace(/\s+/g, " ").trim();
+
+          // Must contain a price to be a menu item
+          const priceMatch = allText.match(/\$(\d+\.\d{2})/);
+          if (!priceMatch) continue;
+
+          const price = `$${priceMatch[1]}`;
+
+          // Item name: text before the price.
+          // Strip common prefixes like "#1 most liked", "Plus small"
+          let beforePrice = allText.split(priceMatch[0])[0].trim();
+          beforePrice = beforePrice
+            .replace(/^#\d+\s*most\s*liked\s*/i, "")
+            .replace(/^Plus\s*small\s*/i, "")
+            .trim();
+
+          if (!beforePrice || beforePrice.length < 2) continue;
+          if (seenNames.has(beforePrice)) continue;
+          seenNames.add(beforePrice);
+
+          // Description: text after the price
+          const afterPrice = allText.split(priceMatch[0]).slice(1).join("").trim();
+          // Clean up UI artifacts that leak into text content
+          const description = afterPrice
+            .replace(/Plus\s*small\s*/gi, "")
+            .replace(/^Create your own\s*/i, "")
+            .trim()
+            .slice(0, 200);
+
+          // Find the nearest category heading above this link
+          const linkTop = link.getBoundingClientRect().top;
+          let category = "";
+          for (let i = categoryHeadings.length - 1; i >= 0; i--) {
+            if (categoryHeadings[i].top < linkTop) {
+              category = categoryHeadings[i].text;
+              break;
+            }
+          }
+
+          results.push({
+            itemName: beforePrice,
+            description,
+            price,
+            category,
+          });
+        }
+
+        return results;
+      }, url);
+
+      return items.filter((i) => i.itemName.length > 0);
+    } finally {
+      await page.close();
+    }
   }
 
   async cartAdd(_restaurantUrl: string, _itemName: string): Promise<CartAddResult> {

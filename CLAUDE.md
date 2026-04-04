@@ -15,8 +15,8 @@ Food delivery automation CLI with pluggable service adapters. Uses Playwright to
 | 1 | Scaffold (CLI, adapter interface, config) | Done |
 | 2 | Auth flow (Playwright persistent context, stealth, session check) | Done |
 | 3 | `hungry search <query>` — scrape Uber Eats search results | Done |
-| **4** | **`hungry menu <url>` — scrape restaurant menu** | **Next** |
-| 5 | `hungry cart add/view/clear` — cart operations | Pending |
+| 4 | `hungry menu <url>` — scrape restaurant menu | Done |
+| **5** | **`hungry cart add/view/clear` — cart operations** | **Next** |
 | 6 | `hungry order [--confirm]` — order summary + placement | Pending |
 
 #### Validation checkpoints (Phase 1)
