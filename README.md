@@ -125,6 +125,20 @@ metadata:
 
 [TOON format spec](https://toonformat.dev/)
 
+## Skills
+
+hungry-cli ships with Claude Code skills in `.claude/skills/` that add opinionated, high-level workflows on top of the base commands:
+
+| Skill | Trigger | What it does |
+|-------|---------|--------------|
+| `/healthy` | "healthy", "nutritious", "salad", "clean eating" | Filters out junk food, ranks by nutrition signals |
+| `/cheap` | "cheap", "budget", "deals", "under $X" | Finds BOGO deals, low fees, sorts by value |
+| `/quick` | "fast", "ASAP", "hurry", "under 20 min" | Sorts by ETA, filters to fastest options |
+| `/variety` | "something different", "surprise me", "bored" | Checks order history, avoids recent repeats |
+| `/lunch` | "feed me", "hungry", "what should I eat" | Combines all four — picks top 3 balancing health, budget, speed, variety |
+
+These skills are designed for use with Claude Code or any LLM agent. They use `--toon` output for efficient token usage and guide the agent through the full search-to-order workflow.
+
 ## Architecture
 
 ```
