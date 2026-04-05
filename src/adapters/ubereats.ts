@@ -25,16 +25,30 @@ const STEALTH_ARGS = [
   "--disable-features=IsolateOrigins,site-per-process",
   "--no-first-run",
   "--no-default-browser-check",
+  // Accept self-signed certs from OpenShell L7 proxy or corporate proxies
+  "--ignore-certificate-errors",
 ];
 
 // Common launch options shared between auth and headless contexts.
-// Uses channel: 'chrome' to launch the user's real Chrome installation
-// instead of Playwright's bundled Chromium — much harder to detect as automation.
+// Uses channel: 'chrome' when available (real Chrome, harder to detect).
+// Falls back to bundled Chromium in sandbox/CI environments where Chrome isn't installed.
+function hasChrome(): boolean {
+  try {
+    const { execSync } = require("child_process");
+    execSync("which google-chrome || which google-chrome-stable || test -f /opt/google/chrome/chrome || test -f '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const LAUNCH_OPTIONS = {
   args: STEALTH_ARGS,
   viewport: { width: 1280, height: 900 } as const,
   ignoreDefaultArgs: ["--enable-automation"],
-  channel: "chrome" as const,
+  // Accept self-signed certs from corporate proxies or OpenShell L7 proxy
+  ignoreHTTPSErrors: true,
+  ...(hasChrome() ? { channel: "chrome" as const } : {}),
 };
 
 export class UberEatsAdapter extends BaseAdapter {
