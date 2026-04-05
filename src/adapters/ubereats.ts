@@ -1,8 +1,21 @@
 // Uber Eats adapter — uses Playwright to automate the Uber Eats website.
 
-import { chromium, type BrowserContext, type Browser } from "playwright";
+import { chromium as vanillaChromium, type BrowserContext, type Browser } from "playwright";
 import { existsSync, mkdirSync } from "fs";
 import { resolve } from "path";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let stealthChromium: any = null;
+try {
+  // Stealth plugin only needed for auth (visible browser, bot detection).
+  // Lazy-load to avoid breaking headless search in sandbox.
+  const pExtra = require("playwright-extra");
+  const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+  stealthChromium = pExtra.chromium;
+  stealthChromium.use(StealthPlugin());
+} catch {
+  // playwright-extra not installed — stealth not available
+}
 import {
   BaseAdapter,
   type SearchResult,
@@ -33,6 +46,8 @@ const STEALTH_ARGS = [
 // Uses channel: 'chrome' when available (real Chrome, harder to detect).
 // Falls back to bundled Chromium in sandbox/CI environments where Chrome isn't installed.
 function hasChrome(): boolean {
+  // HUNGRY_USE_BUNDLED=1 forces Playwright's bundled Chromium (for sandbox compat)
+  if (process.env.HUNGRY_USE_BUNDLED === "1") return false;
   try {
     const { execSync } = require("child_process");
     execSync("which google-chrome || which google-chrome-stable || test -f /opt/google/chrome/chrome || test -f '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'", { stdio: "ignore" });
@@ -41,6 +56,10 @@ function hasChrome(): boolean {
     return false;
   }
 }
+
+// Always use vanilla chromium for regular operations.
+// Stealth is only used for auth (see auth() method).
+const chromium = vanillaChromium;
 
 const LAUNCH_OPTIONS = {
   args: STEALTH_ARGS,
@@ -79,10 +98,13 @@ export class UberEatsAdapter extends BaseAdapter {
   async auth(): Promise<void> {
     mkdirSync(this.stateDir, { recursive: true });
 
+    // Use stealth chromium for auth when Chrome isn't available (avoids bot detection)
+    const authChromium = (!hasChrome() && stealthChromium) ? stealthChromium : chromium;
+
     // Use a persistent context with user data dir — this preserves
     // cookies, localStorage, IndexedDB, service workers, and other
     // browser state that storageState alone misses.
-    const context = await chromium.launchPersistentContext(this.userDataDir, {
+    const context = await authChromium.launchPersistentContext(this.userDataDir, {
       ...LAUNCH_OPTIONS,
       headless: false,
     });
@@ -148,15 +170,29 @@ export class UberEatsAdapter extends BaseAdapter {
       throw new Error("Not logged in. Run `hungry auth` first.");
     }
 
-    // Prefer persistent context (user data dir) for best session durability
-    this.context = await chromium.launchPersistentContext(this.userDataDir, {
-      ...LAUNCH_OPTIONS,
-      headless,
-    });
-
-    // launchPersistentContext returns a BrowserContext but we need to track
-    // the browser for cleanup — persistent contexts own their browser
-    this.browser = this.context.browser();
+    // Two modes:
+    // 1. Persistent context (local Chrome) — best session durability, keeps
+    //    full browser profile (cookies, localStorage, IndexedDB, service workers).
+    // 2. StorageState context (sandbox/proxy) — launches fresh browser and injects
+    //    cookies from auth.json. Required when running through a TLS-terminating
+    //    proxy (like OpenShell) where persistent context cookies don't survive.
+    if (hasChrome()) {
+      this.context = await chromium.launchPersistentContext(this.userDataDir, {
+        ...LAUNCH_OPTIONS,
+        headless,
+      });
+      this.browser = this.context.browser();
+    } else {
+      // Sandbox mode: use storageState from auth.json
+      this.browser = await chromium.launch({
+        ...LAUNCH_OPTIONS,
+        headless,
+      });
+      this.context = await this.browser.newContext({
+        storageState: this.authStatePath,
+        viewport: { width: 1280, height: 900 },
+      });
+    }
 
     return this.context;
   }
@@ -173,16 +209,18 @@ export class UberEatsAdapter extends BaseAdapter {
     try {
       // Navigate to Uber Eats search — the URL pattern handles the query directly
       const searchUrl = `${UBEREATS_URL}/search?q=${encodeURIComponent(query)}`;
-      await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
       // Wait for search results to render — Uber Eats loads results dynamically.
       // Look for links to /store/ pages which indicate restaurant result cards.
-      await page.waitForSelector('a[href*="/store/"]', { timeout: 15000 }).catch(() => {
+      // Longer timeout for sandbox environments where pages load through a proxy.
+      await page.waitForSelector('a[href*="/store/"]', { timeout: 20000 }).catch(() => {
         // No results found within timeout — return empty
       });
 
-      // Give the page a moment for remaining cards to hydrate
-      await page.waitForTimeout(2000);
+      // Give the page time for remaining cards to hydrate.
+      // Sandbox/proxy environments need more time than local.
+      await page.waitForTimeout(5000);
 
       // Scrape restaurant cards from the search results.
       // Each card is an <a> to /store/, but the metadata (rating, ETA, fee)
