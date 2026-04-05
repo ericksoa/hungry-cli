@@ -856,8 +856,17 @@ export class UberEatsAdapter extends BaseAdapter {
   }
 
   async cleanup(): Promise<void> {
-    if (this.context) {
-      await this.context.close();
+    try {
+      if (this.context) {
+        await this.context.close().catch(() => {});
+        this.context = null;
+      }
+      if (this.browser) {
+        await this.browser.close().catch(() => {});
+        this.browser = null;
+      }
+    } catch {
+      // Best effort cleanup
       this.context = null;
       this.browser = null;
     }
