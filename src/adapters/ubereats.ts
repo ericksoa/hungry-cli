@@ -1,8 +1,25 @@
 // Uber Eats adapter — uses Playwright to automate the Uber Eats website.
 
 import { chromium as vanillaChromium, type BrowserContext, type Browser } from "playwright";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { resolve } from "path";
+import { execSync } from "child_process";
+
+function logMetrics(label: string): void {
+  if (!process.env.HUNGRY_METRICS) return;
+  try {
+    const memInfo = readFileSync("/proc/meminfo", "utf-8");
+    const memTotal = memInfo.match(/MemTotal:\s+(\d+)/)?.[1];
+    const memAvail = memInfo.match(/MemAvailable:\s+(\d+)/)?.[1];
+    const procs = execSync("ls /proc/*/cmdline 2>/dev/null | wc -l", { encoding: "utf-8" }).trim();
+    const chromiumProcs = execSync("ls /proc/*/cmdline 2>/dev/null | xargs grep -l chromium 2>/dev/null | wc -l", { encoding: "utf-8" }).trim();
+    console.error(`[metrics:${label}] mem_total=${memTotal}kB mem_avail=${memAvail}kB procs=${procs} chromium_procs=${chromiumProcs} time=${new Date().toISOString()}`);
+  } catch {
+    // Not on Linux or /proc not available
+    const mem = process.memoryUsage();
+    console.error(`[metrics:${label}] rss=${Math.round(mem.rss/1024/1024)}MB heap=${Math.round(mem.heapUsed/1024/1024)}MB time=${new Date().toISOString()}`);
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let stealthChromium: any = null;
@@ -162,6 +179,7 @@ export class UberEatsAdapter extends BaseAdapter {
   }
 
   private async launchContext(headless = true): Promise<BrowserContext> {
+    logMetrics("launchContext:start");
     // If we already have a context, only reuse it if the headless mode matches
     if (this.context) {
       // Can't switch headless mode on an existing context — just reuse
@@ -195,6 +213,7 @@ export class UberEatsAdapter extends BaseAdapter {
         viewport: { width: 1280, height: 900 },
       });
     }
+    logMetrics("launchContext:done");
 
     return this.context;
   }
@@ -205,6 +224,7 @@ export class UberEatsAdapter extends BaseAdapter {
   }
 
   async search(query: string, _opts?: SearchOptions): Promise<SearchResult[]> {
+    logMetrics("search:start");
     const context = await this.launchContext();
     const page = await context.newPage();
 
@@ -310,9 +330,11 @@ export class UberEatsAdapter extends BaseAdapter {
         });
       });
 
+      logMetrics("search:scraped");
       return results.filter((r) => r.restaurant.length > 0);
     } finally {
       await page.close();
+      logMetrics("search:page_closed");
     }
   }
 
@@ -1045,6 +1067,7 @@ export class UberEatsAdapter extends BaseAdapter {
   }
 
   async cleanup(): Promise<void> {
+    logMetrics("cleanup:start");
     try {
       if (this.context) {
         await this.context.close().catch(() => {});
@@ -1059,6 +1082,7 @@ export class UberEatsAdapter extends BaseAdapter {
       this.context = null;
       this.browser = null;
     }
+    logMetrics("cleanup:done");
   }
 }
 
