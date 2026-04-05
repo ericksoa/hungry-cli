@@ -454,7 +454,7 @@ export class UberEatsAdapter extends BaseAdapter {
   ): Promise<CartAddResult> {
     // Cart interactions need headed mode — Uber Eats blocks clicks in headless
     await this.cleanup(); // close any existing headless context
-    const context = await this.launchContext(false);
+    const context = await this.launchContext(hasChrome() ? false : true);
     const page = await context.newPage();
 
     try {
@@ -680,7 +680,7 @@ export class UberEatsAdapter extends BaseAdapter {
 
   async cartView(): Promise<CartState> {
     await this.cleanup();
-    const context = await this.launchContext(false);
+    const context = await this.launchContext(hasChrome() ? false : true);
     const page = await context.newPage();
 
     try {
@@ -853,7 +853,7 @@ export class UberEatsAdapter extends BaseAdapter {
 
   async cartClear(): Promise<void> {
     await this.cleanup();
-    const context = await this.launchContext(false);
+    const context = await this.launchContext(hasChrome() ? false : true);
     const page = await context.newPage();
 
     try {
@@ -892,7 +892,7 @@ export class UberEatsAdapter extends BaseAdapter {
   async order(confirm?: boolean): Promise<OrderResult> {
     // Use headed mode — checkout page needs full JS rendering
     await this.cleanup();
-    const context = await this.launchContext(false);
+    const context = await this.launchContext(hasChrome() ? false : true);
     const page = await context.newPage();
 
     try {
