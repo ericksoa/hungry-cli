@@ -24,6 +24,8 @@ import {
   type CartState,
   type OrderResult,
   type SearchOptions,
+  type SelectionPromptFn,
+  type RequiredSelectionGroup,
 } from "../adapter.js";
 import { getDataDir } from "../config.js";
 
@@ -423,7 +425,11 @@ export class UberEatsAdapter extends BaseAdapter {
     }
   }
 
-  async cartAdd(restaurantUrl: string, itemName: string): Promise<CartAddResult> {
+  async cartAdd(
+    restaurantUrl: string,
+    itemName: string,
+    promptFn?: SelectionPromptFn,
+  ): Promise<CartAddResult> {
     // Cart interactions need headed mode — Uber Eats blocks clicks in headless
     await this.cleanup(); // close any existing headless context
     const context = await this.launchContext(false);
@@ -455,18 +461,181 @@ export class UberEatsAdapter extends BaseAdapter {
 
       // Click the item to open the detail/customization modal
       await (itemLink.asElement()!).click();
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(2000);
+
+      // Detect required selection groups and extract their options.
+      // Strategy: group all radios by name, then for each group walk up from
+      // the first radio to find its tightest containing section. Only keep
+      // groups whose section contains "Required" text.
+      const detectedGroups = await page.evaluate(() => {
+        const radios = Array.from(document.querySelectorAll('input[type="radio"]')) as HTMLInputElement[];
+
+        // Group radios by name attribute
+        const byName = new Map<string, HTMLInputElement[]>();
+        for (const r of radios) {
+          const name = r.getAttribute("name") || "unnamed";
+          if (!byName.has(name)) byName.set(name, []);
+          byName.get(name)!.push(r);
+        }
+
+        const result: {
+          id: string;
+          label: string;
+          options: { label: string; price: string }[];
+          hasSelection: boolean;
+        }[] = [];
+
+        for (const [name, groupRadios] of byName.entries()) {
+          // Skip groups with only 1 radio — those are typically "Most popular"
+          // carousel combo items, not actual selection groups.
+          if (groupRadios.length < 2) continue;
+
+          // Find the tightest section containing ALL radios in this group
+          // that also has "Required" in its text.
+          const first = groupRadios[0];
+          let section: HTMLElement | null = first.parentElement;
+          let foundRequired = false;
+
+          for (let i = 0; i < 10 && section; i++) {
+            const sectionText = section.textContent || "";
+            const hasRequired = sectionText.includes("Required");
+            const containsAll = groupRadios.every((r) => section!.contains(r));
+
+            if (hasRequired && containsAll) {
+              foundRequired = true;
+              break;
+            }
+            section = section.parentElement;
+          }
+
+          if (!foundRequired || !section) continue;
+
+          const sectionText = section.textContent || "";
+
+          // Extract heading (e.g., "Choose your size")
+          const headingMatch = sectionText.match(/((?:Choose|Select|Pick)\s+your\s+\w+)/i)
+            || sectionText.match(/((?:Choose|Select|Pick)\s+[^$]{3,25}?)(?:Choose|\d|Required)/i);
+          let heading = headingMatch ? headingMatch[1].trim() : "Required selection";
+          // Clean up trailing "Choose" from partial regex match
+          heading = heading.replace(/\s*Choose\s*$/i, "").trim();
+
+          // Check if group already has a selection
+          const hasSelection = groupRadios.some((r) => r.checked);
+
+          // Extract clean option labels from each radio's row.
+          // Walk up from each radio, stopping at the smallest ancestor whose
+          // text doesn't overlap with other radios in the group.
+          const options: { label: string; price: string }[] = [];
+          for (let idx = 0; idx < groupRadios.length; idx++) {
+            const radio = groupRadios[idx];
+            const otherRadios = groupRadios.filter((_, i) => i !== idx);
+
+            let row: HTMLElement | null = radio;
+            for (let i = 0; i < 6; i++) {
+              if (!row?.parentElement || row.parentElement === section) break;
+              row = row.parentElement;
+              // Stop if this element contains another radio from the group —
+              // that means we've gone too far and are in a shared container.
+              if (otherRadios.some((r) => row!.contains(r))) {
+                // Back up one level
+                row = radio;
+                for (let j = 0; j < i; j++) row = row!.parentElement!;
+                break;
+              }
+            }
+            const rowText = (row?.textContent || "").replace(/\s+/g, " ").trim();
+            const priceMatch = rowText.match(/\+\$[\d.]+/);
+            const label = rowText
+              .replace(/\+?\$[\d.]+/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            options.push({
+              label: label || `Option ${options.length + 1}`,
+              price: priceMatch ? priceMatch[0] : "",
+            });
+          }
+
+          result.push({ id: name, label: heading, options, hasSelection });
+        }
+
+        return result;
+      });
+
+      // Filter to only groups that need a selection (nothing checked yet)
+      const unselectedGroups: RequiredSelectionGroup[] = detectedGroups
+        .filter((g) => !g.hasSelection)
+        .map((g) => ({ id: g.id, label: g.label, options: g.options }));
+
+      if (unselectedGroups.length > 0) {
+        if (process.env.HUNGRY_DEBUG) {
+          console.error(`Found ${unselectedGroups.length} required group(s) needing selection`);
+          for (const g of unselectedGroups) {
+            console.error(`  ${g.label} (${g.id}): ${g.options.map((o) => `${o.label} ${o.price}`).join(", ")}`);
+          }
+        }
+
+        if (!promptFn) {
+          throw new Error(
+            `"${itemName}" has required selections (${unselectedGroups.map((g) => g.label).join(", ")}). ` +
+            `Run interactively or provide selections.`
+          );
+        }
+
+        // Ask the user to choose
+        const selections = await promptFn(unselectedGroups);
+
+        // Apply the user's selections by clicking the chosen radio buttons
+        for (const group of unselectedGroups) {
+          const chosenIdx = selections[group.id];
+          if (chosenIdx == null) continue; // user skipped this group
+          // Click the Nth radio in this group
+          const radios = page.locator(`input[type="radio"][name="${group.id}"]`);
+          const count = await radios.count();
+          if (chosenIdx >= 0 && chosenIdx < count) {
+            const radio = radios.nth(chosenIdx);
+            // Try clicking the radio directly, fall back to its label
+            if (await radio.isVisible({ timeout: 1000 }).catch(() => false)) {
+              await radio.click({ force: true });
+            } else {
+              const label = page.locator(`label:has(input[type="radio"][name="${group.id}"])`).nth(chosenIdx);
+              await label.click();
+            }
+            await page.waitForTimeout(500);
+          }
+        }
+      }
+
+      if (process.env.HUNGRY_DEBUG) {
+        await page.screenshot({ path: "/tmp/hungry-debug-cart-after-selections.png" });
+        console.error("Screenshot: /tmp/hungry-debug-cart-after-selections.png");
+      }
 
       // Click "Add to order" button in the modal.
-      // Look for buttons with text containing "Add to order" or "Add X to order"
       const addButton = page.getByRole("button", { name: /add.*to order|add \d+ to order/i });
       await addButton.waitFor({ timeout: 8000 });
+
+      // Check if the button is disabled (required selections still missing)
+      const isDisabled = await addButton.isDisabled().catch(() => false);
+      if (isDisabled) {
+        if (process.env.HUNGRY_DEBUG) {
+          await page.screenshot({ path: "/tmp/hungry-debug-cart-add-disabled.png" });
+          console.error("Screenshot: /tmp/hungry-debug-cart-add-disabled.png — Add button is disabled!");
+        }
+        throw new Error(
+          `Cannot add "${itemName}" — required selections are still missing. ` +
+          `Try adding via the Uber Eats app.`
+        );
+      }
+
       await addButton.click();
       await page.waitForTimeout(2000);
+      if (process.env.HUNGRY_DEBUG) {
+        await page.screenshot({ path: "/tmp/hungry-debug-cart-after-add.png" });
+        console.error("Screenshot: /tmp/hungry-debug-cart-after-add.png");
+      }
 
       // After adding, try to read the cart count from the page
       const cartInfo = await page.evaluate(() => {
-        // Look for cart badge or button showing item count and total
         const cartButton = document.querySelector('[data-testid="cart-button"], a[href*="/checkout"]');
         const text = cartButton?.textContent || "";
         const countMatch = text.match(/(\d+)\s*item/i);
@@ -713,12 +882,24 @@ export class UberEatsAdapter extends BaseAdapter {
       await page.waitForTimeout(3000);
 
       // Click the cart button to open sidebar
+      if (process.env.HUNGRY_DEBUG) {
+        await page.screenshot({ path: "/tmp/hungry-debug-order-home.png" });
+        console.error("Screenshot: /tmp/hungry-debug-order-home.png");
+      }
       const cartButton = page.locator('button[aria-label*="cart" i]').first();
       if (!(await cartButton.isVisible({ timeout: 5000 }).catch(() => false))) {
+        if (process.env.HUNGRY_DEBUG) {
+          await page.screenshot({ path: "/tmp/hungry-debug-order-no-cart-btn.png" });
+          console.error("Screenshot: /tmp/hungry-debug-order-no-cart-btn.png (no cart button found)");
+        }
         throw new Error("Cart is empty. Add items first.");
       }
       await cartButton.click();
       await page.waitForTimeout(3000);
+      if (process.env.HUNGRY_DEBUG) {
+        await page.screenshot({ path: "/tmp/hungry-debug-order-cart-sidebar.png" });
+        console.error("Screenshot: /tmp/hungry-debug-order-cart-sidebar.png");
+      }
 
       // Click "Go to checkout" in the sidebar
       const checkoutLink = page.locator('a:has-text("Go to checkout"), a:has-text("checkout"), button:has-text("Go to checkout")').first();
@@ -726,12 +907,20 @@ export class UberEatsAdapter extends BaseAdapter {
         await checkoutLink.click();
         await page.waitForTimeout(4000);
       } else {
+        if (process.env.HUNGRY_DEBUG) {
+          console.error("No checkout link found in sidebar, navigating directly to /checkout");
+        }
         // Try navigating directly
         await page.goto(`${UBEREATS_URL}/checkout`, {
           waitUntil: "domcontentloaded",
           timeout: 20000,
         });
         await page.waitForTimeout(4000);
+      }
+
+      if (process.env.HUNGRY_DEBUG) {
+        await page.screenshot({ path: "/tmp/hungry-debug-order-checkout.png" });
+        console.error("Screenshot: /tmp/hungry-debug-order-checkout.png");
       }
 
       // Scrape the checkout page for order summary

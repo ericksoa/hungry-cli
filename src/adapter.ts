@@ -36,6 +36,28 @@ export interface CartAddResult {
   itemCount: number;
 }
 
+/** A single option within a required selection group (e.g., "Large +$7.75"). */
+export interface SelectionOption {
+  label: string;
+  price: string; // e.g., "+$7.75" or "" if no extra cost
+}
+
+/** A required selection group (e.g., "Choose your size"). */
+export interface RequiredSelectionGroup {
+  id: string;          // internal group identifier
+  label: string;       // display label, e.g., "Choose your size"
+  options: SelectionOption[];
+}
+
+/**
+ * Callback the adapter invokes when an item has required selections.
+ * Receives the groups and their options; returns a map of group id -> chosen option index.
+ * Return an empty map or throw to abort the add.
+ */
+export type SelectionPromptFn = (
+  groups: RequiredSelectionGroup[],
+) => Promise<Record<string, number>>;
+
 export interface OrderResult {
   success: boolean;
   total: string;
@@ -63,8 +85,12 @@ export abstract class BaseAdapter {
   /** Get full menu for a restaurant. */
   abstract menu(restaurantUrl: string): Promise<MenuItem[]>;
 
-  /** Add an item to the cart. */
-  abstract cartAdd(restaurantUrl: string, itemName: string): Promise<CartAddResult>;
+  /** Add an item to the cart. If the item has required selections, promptFn is called. */
+  abstract cartAdd(
+    restaurantUrl: string,
+    itemName: string,
+    promptFn?: SelectionPromptFn,
+  ): Promise<CartAddResult>;
 
   /** View current cart contents. */
   abstract cartView(): Promise<CartState>;

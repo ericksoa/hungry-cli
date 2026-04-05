@@ -6,6 +6,7 @@ import {
   type CartAddResult,
   type CartState,
   type OrderResult,
+  type SelectionPromptFn,
 } from "./adapter.js";
 
 // Concrete test implementation of the abstract class
@@ -49,7 +50,7 @@ class TestAdapter extends BaseAdapter {
     ];
   }
 
-  async cartAdd(_restaurantUrl: string, _itemName: string): Promise<CartAddResult> {
+  async cartAdd(_restaurantUrl: string, _itemName: string, _promptFn?: SelectionPromptFn): Promise<CartAddResult> {
     return { success: true, cartTotal: "$12.99", itemCount: 1 };
   }
 

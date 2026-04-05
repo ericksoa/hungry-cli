@@ -3,10 +3,12 @@
 // hungry-cli — food delivery automation from the terminal.
 
 import { Command } from "commander";
+import { createInterface } from "readline";
 import { createAdapter } from "./adapters/index.js";
 import { getAdapterName } from "./config.js";
 import { formatSearchResults, formatMenu, formatCart } from "./format.js";
 import { toonResponse } from "./toon.js";
+import type { RequiredSelectionGroup } from "./adapter.js";
 
 type OutputFormat = { json?: boolean; toon?: boolean };
 
@@ -30,6 +32,39 @@ program
 
 function adapter() {
   return createAdapter(getAdapterName());
+}
+
+/** Interactive readline prompt that asks the user to pick options for required selection groups. */
+async function cliSelectionPrompt(
+  groups: RequiredSelectionGroup[],
+): Promise<Record<string, number>> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const ask = (question: string): Promise<string> =>
+    new Promise((resolve) => rl.question(question, resolve));
+
+  const selections: Record<string, number> = {};
+  try {
+    for (const group of groups) {
+      console.error(`\n${group.label}`);
+      for (let i = 0; i < group.options.length; i++) {
+        const opt = group.options[i];
+        const price = opt.price ? ` (${opt.price})` : "";
+        console.error(`  ${i + 1}. ${opt.label}${price}`);
+      }
+      while (true) {
+        const answer = await ask(`Pick 1-${group.options.length}: `);
+        const num = parseInt(answer.trim(), 10);
+        if (num >= 1 && num <= group.options.length) {
+          selections[group.id] = num - 1;
+          break;
+        }
+        console.error(`  Please enter a number between 1 and ${group.options.length}.`);
+      }
+    }
+  } finally {
+    rl.close();
+  }
+  return selections;
 }
 
 // --- auth ---
@@ -113,7 +148,7 @@ cart
     const a = adapter();
     try {
       const itemName = itemParts.join(" ");
-      const result = await a.cartAdd(restaurantUrl, itemName);
+      const result = await a.cartAdd(restaurantUrl, itemName, cliSelectionPrompt);
       output(result, opts, () => `Added "${itemName}" to cart. Total: ${result.cartTotal}`);
     } finally {
       await a.cleanup();
